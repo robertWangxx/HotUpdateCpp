@@ -338,6 +338,7 @@ int main()
 	int error = GetLastError();
 	if (hModule)
 	{
+		// 需要设置导出函数 才能通过GetProcAddress获得函数地址 函数名可以用 dumpbin /exports 动态库(执行文件) 来查看  (c++编译器会依据函数名、参数、类名等生成实际的函数名称)
 		LPCVOID pNewfun = GetProcAddress(hModule, "?fun@Fun_son@@UAEXHH@Z");
 		LPCVOID pNewfun_v1 = GetProcAddress(hModule, "?fun_v1@Fun_son@@UAEXHH@Z");
 
