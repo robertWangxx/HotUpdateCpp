@@ -1,6 +1,8 @@
 # HotUpdateCpp
 热更新c++
 
+windows和linux下原理几乎相同
+
 windows:
 大概原理和顺序
 	重点是原函数地址和目的函数地址获取的方法
@@ -10,3 +12,7 @@ windows:
 	通过扫描特征码获取函数地址适用x86 扫描范围较小
 	增量链接启动：函数入口在@ILT处 通过增量链接表来跳转
 	增量链接关闭：函数入口直接在定义处
+	
+	main.cpp fun1.h fun1.cpp 编译生成.exe
+	fun_dll中文件编译生成.dll
+	
