@@ -36,4 +36,8 @@ windows:
 	
 	main.cpp fun1.h fun1.cpp 编译生成.exe
 	fun_dll中文件编译生成.dll
-	
+
+linux:
+	相关API : dlopen(加载so库) dlsym(通过函数符号获取函数地址) dlclose(关闭so库) mprotect(修改内存页属性)
+	指令 : nm(获取符号表)  readelf   objdump
+	编译选项设置 : -rdynamic(将所有符号放入动态符号表里 方便dlsym使用)  -fpic(生成的代码使用相对地址 没有绝对地址 so编译选项)
