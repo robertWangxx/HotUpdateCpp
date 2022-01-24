@@ -37,6 +37,8 @@ windows:
 	main.cpp fun1.h fun1.cpp 编译生成.exe
 	fun_dll中文件编译生成.dll
 
+find_addr_func.py : 利用vs的dumpbin.exe工具 对exe或dll进行反汇编(/DISASM)或导出符号表(/EXPORTS) 然后匹配并打印出要查找的信息
+
 linux:
 	相关API : dlopen(加载so库) dlsym(通过函数符号获取函数地址) dlclose(关闭so库) mprotect(修改内存页属性)
 	指令 : nm(获取符号表)  readelf   objdump
