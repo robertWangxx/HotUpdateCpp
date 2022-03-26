@@ -1,12 +1,12 @@
 /*
-	���ԭ����˳��
-	�ص���ԭ������ַ��Ŀ�ĺ�����ַ��ȡ�ķ���
-	dumpbin�����ã������exe �õ�������ڵĵ�ַ(ʵ������ʱ��ַ��䵫��Ե�ַ����) ������ڵ�������(����ʱҲ���ֲ��� ���ڴ��������)��
-	releaseģʽ��ĳЩ�����ᱻ�Ż��� ʹ��dumpbin������޷��õ��������  ���ú�������ʱ���޷��Ż���������ڵ�ַ ���øú�����ȡ��ַ
-	x86��x64�µĺ�����ת���ָ��ʵ������
-	ͨ��ɨ���������ȡ������ַ����x86 ɨ�跶Χ��С
-	�����������������������@ILT�� ͨ���������ӱ�����ת
-	�������ӹرգ��������ֱ���ڶ��崦
+	大概原理和顺序
+	重点是原函数地址和目的函数地址获取的方法
+	dumpbin的作用（反汇编exe 得到函数入口的地址(实际运行时地址会变但相对地址不变) 函数入口的特征码(运行时也保持不变 属于代码段内容)）
+	release模式下某些函数会被优化掉 使用dumpbin反汇编无法得到函数入口  设置函数导出时则无法优化掉函数入口地址 可用该函数获取基址
+	x86和x64下的函数跳转汇编指令实现区别
+	通过扫描特征码获取函数地址适用x86 扫描范围较小
+	增量链接启动：函数入口在@ILT处 通过增量链接表来跳转
+	增量链接关闭：函数入口直接在定义处
 */
 #include <stdio.h>
 #include <stdarg.h>
@@ -16,12 +16,12 @@
 
 //#pragma comment(linker, "/entry:testfun")
 
-#define JMPCODE_LENGTH 5            //x86 ƽ̹�ڴ�ģʽ�£�������תָ���  
-#define JMPCMD_LENGTH  1            //��е��0xe9����  
-#define JMPCMD         0xe9         //��Ӧ����jmpָ�� 
+#define JMPCODE_LENGTH 5            //x86 平坦内存模式下，绝对跳转指令长度  
+#define JMPCMD_LENGTH  1            //机械码0xe9长度  
+#define JMPCMD         0xe9         //对应汇编的jmp指令 
 
 
-//дjmp��x64�汾����
+//写jmp的x64版本函数
 bool WriteJMP_x64(LPCVOID dwFrom, LPCVOID dwTo)
 {
 	if (dwFrom == dwTo)
@@ -31,10 +31,10 @@ bool WriteJMP_x64(LPCVOID dwFrom, LPCVOID dwTo)
 
 	DWORD_PTR dwAdr = (DWORD_PTR)dwFrom;
 	DWORD_PTR dwAdrTo = (DWORD_PTR)dwTo;
-	DWORD   ProtectVar;              // �������Ա���
-	MEMORY_BASIC_INFORMATION MemInfo;    //�ڴ��ҳ������Ϣ
+	DWORD   ProtectVar;              // 保护属性变量
+	MEMORY_BASIC_INFORMATION MemInfo;    //内存分页属性信息
 
-	// ȡ�ö�Ӧ�ڴ��ԭʼ����
+	// 取得对应内存的原始属性
 	if (0 != VirtualQuery(dwFrom, &MemInfo, sizeof(MEMORY_BASIC_INFORMATION)))
 	{
 		if (VirtualProtect(MemInfo.BaseAddress, MemInfo.RegionSize, PAGE_EXECUTE_READWRITE, &MemInfo.Protect))
@@ -50,10 +50,10 @@ bool WriteJMP_x64(LPCVOID dwFrom, LPCVOID dwTo)
 			dwAdr += 4;
 			*(BYTE*)dwAdr = 0xc3;
 
-			// �Ļ�ԭ����
+			// 改回原属性
 			VirtualProtect(MemInfo.BaseAddress, MemInfo.RegionSize, MemInfo.Protect, &ProtectVar);
 
-			// �޸ĺ󣬻���Ҫˢ��cache
+			// 修改后，还需要刷新cache
 			//FlushInstructionCache(GetCurrentProcess(), dwFrom, JMPCODE_LENGTH);
 
 			return true;
@@ -62,16 +62,16 @@ bool WriteJMP_x64(LPCVOID dwFrom, LPCVOID dwTo)
 
 	return false;
 	/*
-	push ��ַ�ĵ�32λ
-	mov dword ptr ss:[rsp+4],��ַ�ĸ�32λ
+	push 地址的低32位
+	mov dword ptr ss:[rsp+4],地址的高32位
 	ret
 	*/
 
 	//14 bytes
 }
 
-//jmp xxxx(��ָ��һ��ռ�� 5 bytes)  jmpָ��ռ 1 byte   ��Ե�ַռ 4 bytes  
-//дjmp��x86�汾����  ��Ϊx86��(pNewFunc - pOrigFunc)��ֵ������4�ֽ�   x64��(pNewFunc - pOrigFunc)ֵ���ܳ���4�ֽڴ�С
+//jmp xxxx(该指令一共占用 5 bytes)  jmp指令占 1 byte   相对地址占 4 bytes  
+//写jmp的x86版本函数  因为x86下(pNewFunc - pOrigFunc)的值不超过4字节   x64下(pNewFunc - pOrigFunc)值可能超过4字节大小
 bool WriteJMP_x86(LPCVOID pOrigFunc, LPCVOID pNewFunc)
 {
 	if (pOrigFunc == pNewFunc)
@@ -79,25 +79,25 @@ bool WriteJMP_x86(LPCVOID pOrigFunc, LPCVOID pNewFunc)
 
 	if (pOrigFunc && pNewFunc)
 	{
-		DWORD   ProtectVar;              // �������Ա���
-		MEMORY_BASIC_INFORMATION MemInfo;    //�ڴ��ҳ������Ϣ
+		DWORD   ProtectVar;              // 保护属性变量
+		MEMORY_BASIC_INFORMATION MemInfo;    //内存分页属性信息
 
-		// ȡ�ö�Ӧ�ڴ��ԭʼ����
+		// 取得对应内存的原始属性
 		if (0 != VirtualQuery(pOrigFunc, &MemInfo, sizeof(MEMORY_BASIC_INFORMATION)))
 		{
 			if (VirtualProtect(MemInfo.BaseAddress, MemInfo.RegionSize, PAGE_EXECUTE_READWRITE, &MemInfo.Protect))
 			{
-				// ����ԭ���ݣ���ֹ������Ҫʹ��memcpy������ʹ�����ƽӿ�
+				// 备份原数据，防止自身需要使用memcpy，不能使用类似接口
 				//__inner_memcpy((unsigned char*)str_instruct_back, (unsigned char*)pOrigFunc, JMPCODE_LENGTH);
 
-				// �޸�Ŀ���ַָ��Ϊ jmp pNewFunc
-				*(unsigned char*)pOrigFunc = JMPCMD;                                      //����API���ں��������ǰ��ע��jmp xxxx  
+				// 修改目标地址指令为 jmp pNewFunc
+				*(unsigned char*)pOrigFunc = JMPCMD;                                      //拦截API，在函数代码段前面注入jmp xxxx  
 				*(DWORD*)((unsigned char*)pOrigFunc + JMPCMD_LENGTH) = (DWORD)pNewFunc - (DWORD)pOrigFunc - JMPCODE_LENGTH;
 
-				// �Ļ�ԭ����
+				// 改回原属性
 				VirtualProtect(MemInfo.BaseAddress, MemInfo.RegionSize, MemInfo.Protect, &ProtectVar);
 
-				// �޸ĺ󣬻���Ҫˢ��cache
+				// 修改后，还需要刷新cache
 				FlushInstructionCache(GetCurrentProcess(), pOrigFunc, JMPCODE_LENGTH);
 
 				return true;
@@ -124,7 +124,7 @@ extern "C" _declspec(dllexport) void fun_base()
 /*extern "C" _declspec(dllexport)*/ void fun2()
 {
 	std::cout << "456" << std::endl;
-	//fun1();		// ����fun2����fun1�� ѭ���ݹ�ķ�������
+	//fun1();		// 测试fun2拦截fun1后 循环递归的风险问题
 	fun_base();
 }
 
@@ -182,46 +182,46 @@ int testfun()
 
 
 
-// ScanAddress ����x86(ɨ�跶Χ���С) x64��Χ̫��
-uintptr_t hanshu_dizhi; //��¼�������Ӧ�ĵ�ַ
+// ScanAddress 适用x86(扫描范围相对小) x64范围太大
+uintptr_t hanshu_dizhi; //记录特征码对应的地址
 uintptr_t ScanAddress(HANDLE process, char *markCode, int nOffset, unsigned long dwReadLen = 4, uintptr_t StartAddr = 0x00400000, uintptr_t EndAddr = 0x7FFFFFFF, int InstructionLen = 0)
 {
-	//************���������룬ת�����ֽ�*****************
+	//************处理特征码，转化成字节*****************
 	if (strlen(markCode) % 2 != 0) return 0;
-	//�����볤��
-	int len = strlen(markCode) / 2;  //��ȡ������ֽ���
+	//特征码长度
+	int len = strlen(markCode) / 2;  //获取代码的字节数
 
-	//��������ת����byte�� ������m_code ��
+	//将特征码转换成byte型 保存在m_code 中
 	BYTE *m_code = new BYTE[len];
 	for (int i = 0; i < len; i++)
 	{
-		//��������ɵ����ַ���һ�ֻ����������͡�
+		//定义可容纳单个字符的一种基本数据类型。
 		char c[] = { markCode[i * 2], markCode[i * 2 + 1], '\0' };
-		//������nptr�ַ������ݲ���base��ת���ɳ�������
+		//将参数nptr字符串根据参数base来转换成长整型数
 		m_code[i] = (BYTE)::strtol(c, NULL, 16);
 	}
-	//ÿ�ζ�ȡ��Ϸ�ڴ���Ŀ�Ĵ�С
+	//每次读取游戏内存数目的大小
 	const DWORD pageSize = 4096;
 
-	// ����������
-	//ÿҳ��ȡ4096���ֽ�
+	// 查找特征码
+	//每页读取4096个字节
 	BYTE *page = new BYTE[pageSize];
 	uintptr_t tmpAddr = StartAddr;
-	//�����������һ�����ȵı�ʶ
+	//定义和特征码一样长度的标识
 	int compare_one = 0;
 
 	while (tmpAddr <= EndAddr)
 	{
-		::ReadProcessMemory(process, (LPCVOID)tmpAddr, page, pageSize, 0); //��ȡ0x400000���ڴ����ݣ�������page������ΪpageSize
+		::ReadProcessMemory(process, (LPCVOID)tmpAddr, page, pageSize, 0); //读取0x400000的内存数据，保存在page，长度为pageSize
 
-		//�ڸ�ҳ�в���������
+		//在该页中查找特征码
 		for (int i = 0; i < pageSize; i++)
 		{
-			if (m_code[0] == page[i])//��һ���ֽ���������ĵ�һ���ֽ���ͬ��������
+			if (m_code[0] == page[i])//有一个字节与特征码的第一个字节相同，则搜索
 			{
 				for (int j = 0; j<len - 1; j++)
 				{
-					if (m_code[j + 1] == page[i + j + 1])//�Ƚ�ÿһ���ֽڵĴ�С������ͬ���˳�
+					if (m_code[j + 1] == page[i + j + 1])//比较每一个字节的大小，不相同则退出
 					{
 						compare_one++;
 					}
@@ -229,20 +229,20 @@ uintptr_t ScanAddress(HANDLE process, char *markCode, int nOffset, unsigned long
 					{
 						compare_one = 0;
 						break;
-					}//����¸��Աȵ��ֽڲ���ȣ����˳���������Դ������
+					}//如果下个对比的字节不相等，则退出，减少资源被利用
 				}
 
 				if ((compare_one + 1) == len)
 				{
-					// �ҵ������봦��
-					//��ֵʱҪ����ʼֵ�������ͻ
+					// 找到特征码处理
+					//赋值时要给初始值，避免冲突
 					uintptr_t dwAddr = tmpAddr + i + nOffset;
 					uintptr_t ullRet = 0;
 					::ReadProcessMemory(process, (void*)dwAddr, &ullRet, dwReadLen, 0);
 					//cout<<dwAddr<<endl;
-					//�����dwAddr�Ѿ���Ӧ�����������ĵ�ַ
-					//��ַ�����Ҳ��10����    ��Ҫת��Ϊ16���� 
-					hanshu_dizhi = dwAddr;//��¼��ַ
+					//这里的dwAddr已经对应的是搜索到的地址
+					//地址输出的也是10进制    需要转化为16进制 
+					hanshu_dizhi = dwAddr;//记录地址
 					if (InstructionLen)
 					{
 						ullRet += dwAddr + dwReadLen;
@@ -253,7 +253,7 @@ uintptr_t ScanAddress(HANDLE process, char *markCode, int nOffset, unsigned long
 			}
 		}
 
-		tmpAddr = tmpAddr + pageSize - len;//��һҳ����Ҫ��ǰһҳ��󳤶�len ��ʼ���ң�������ҳ�����м�������������������
+		tmpAddr = tmpAddr + pageSize - len;//下一页搜索要在前一页最后长度len 开始查找，避免两页交接中间有特征码搜索不出来
 	}
 
 	return 0;
@@ -284,7 +284,7 @@ void getFuncAddr()
 	HANDLE lsProcess = GetCurrentProcess();
 
 	std::cout << ScanAddress(lsProcess, "E97A460000", 0) << std::endl;
-	//2983AC0400008D45D4��Ӧ��ͼ��0x0042578F��ַ��������
+	//2983AC0400008D45D4对应下图的0x0042578F地址的特征码
 	std::cout << hanshu_dizhi << std::endl;
 
 	std::cout << "---------------------------" << std::endl;
@@ -300,11 +300,11 @@ int main()
 	
 	pFun baseFun = &fun_base;
 	/*
-	HMODULE oldhModule = GetModuleHandle(NULL);	// ��ȡ�����̾��
+	HMODULE oldhModule = GetModuleHandle(NULL);	// 获取本进程句柄
 	LPCVOID baseFun = nullptr;
 	if (oldhModule)
 	{
-		baseFun = GetProcAddress(oldhModule, "fun_base");	// ��Ҫ�������� ����ͨ��GetProcAddress��ú�����ַ
+		baseFun = GetProcAddress(oldhModule, "fun_base");	// 需要导出函数 才能通过GetProcAddress获得函数地址
 	}
 	*/
 	LPCVOID pOldfun = nullptr;
@@ -315,7 +315,7 @@ int main()
 	//std::cout << hanshu_dizhi << std::endl;
 	//pOldfun = (LPCVOID)hanshu_dizhi;
 	
-	// ���ݷ�����ļ�����fun_base������ڵ�ַ ���ҳ���Ҫ�滻�ĺ�����ڵ�ַ ����2��֮������ƫ�� Ȼ�����fun_baseʵ�������ڴ��ַ�����Ҫ�滻�ĺ���ʵ�������ڴ��ַ
+	// 根据反汇编文件查找fun_base函数入口地址 再找出需要被替换的旧函数入口地址 计算2者之间的相对偏移 然后根据fun_base实际虚拟内存地址计算出要被替换的旧函数实际虚拟内存地址
 	pOldfun = (LPCVOID)((INT64)baseFun + (0x12E0 - 0x1AA0));	
 
 	//ScanAddress(lsProcess, "E9F4150000", 0);
@@ -324,10 +324,10 @@ int main()
 
 	pOldfun_v1 = (LPCVOID)((INT64)baseFun + (0x12C0 - 0x1AA0));
 	/*
-	HMODULE oldhModule = GetModuleHandleA(NULL);	// ��ȡ�����̾��
+	HMODULE oldhModule = GetModuleHandleA(NULL);	// 获取本进程句柄
 	if (oldhModule)
 	{
-		pOldfun = GetProcAddress(oldhModule, "?fun@Fun_son@@UAEXHH@Z");	// ��Ҫ�������� ����ͨ��GetProcAddress��ú�����ַ
+		pOldfun = GetProcAddress(oldhModule, "?fun@Fun_son@@UAEXHH@Z");	// 需要导出函数 才能通过GetProcAddress获得函数地址
 		pOldfun_v1 = GetProcAddress(oldhModule, "?fun_v1@Fun_son@@UAEXHH@Z");
 	}
 	*/
@@ -338,7 +338,7 @@ int main()
 	int error = GetLastError();
 	if (hModule)
 	{
-		// ��Ҫ���õ������� ����ͨ��GetProcAddress��ú�����ַ ������������ dumpbin /exports ��̬��(ִ���ļ�) ���鿴  (c++�����������ݺ�����������������������ʵ�ʵĺ�������)
+		// 需要设置导出函数 才能通过GetProcAddress获得函数地址 函数名可以用 dumpbin /exports 动态库(执行文件) 来查看  (c++编译器会依据函数名、参数、类名等生成实际的函数名称)
 		LPCVOID pNewfun = GetProcAddress(hModule, "?fun@Fun_son@@UAEXHH@Z");
 		LPCVOID pNewfun_v1 = GetProcAddress(hModule, "?fun_v1@Fun_son@@UAEXHH@Z");
 
